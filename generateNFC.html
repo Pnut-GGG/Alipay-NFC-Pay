@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NFC Data Generator</title>
+</head>
+<body>
+    <h1>生成 支付宝 NFC 支付的 .nfc 文件</h1>
+    <h2>适用于 Flipper Zero</h2>
+    <label for="payUrl">请输入支付链接（获取到收款码再用草料二维码识别）：</label>
+    <input type="text" id="payUrl" placeholder="https://qr.alipay.com/fkx17629ee8clivc1hn8kc8" style="width: 100%;">
+    <br><br>
+    <button id="generateBtn">生成文件并下载</button>
+
+    <script>
+        function quote(str) {
+            return encodeURIComponent(str);
+        }
+
+        // 定义固定的页面数据
+        const fixedPages = {
+            'Page 0': '1D 6E 74 8F',
+            'Page 1': '9A 95 00 00',
+            'Page 2': '0F A3 FF FF',
+            'Page 3': 'E1 10 3E 00',
+            'Page 4': '03 FF 00 FF',
+            'Page 5': '91 01 CE 55',
+            'Page 130': 'FF FF FF BD',
+            'Page 131': '00 00 00 04',
+            'Page 132': '00 00 00 00',
+            'Page 133': '00 00 00 00',
+            'Page 134': '00 00 00 00'
+        };
+
+        // 将字符串转换为字节数组
+        function encodeNdefUri(uri) {
+            const uriBytes = new TextEncoder().encode(uri);
+            const ndefMessage = [0x04, ...uriBytes];
+            return ndefMessage;
+        }
+
+        function generateDataFile(payUrl) {
+            // 检查 URL 是否以 '?noT=ntagtqp' 结尾，如果没有则添加
+            if (!payUrl.endsWith('?noT=ntagtqp')) {
+                payUrl += '?noT=ntagtqp';
+            }
+
+            const scheme = `alipay://nfc/app?id=10000007&actionType=route&codeContent=${quote(payUrl)}`;
+            const url = `render.alipay.com/p/s/ulink/?scene=nfc&scheme=${quote(scheme)}`;
+            console.log('URL:', url);
+
+            // 插入的二进制数据
+            const binaryDataHex = (
+                "54 0F 1B 61 6E 64 72 6F 69 64 2E 63 6F 6D 3A 70 6B 67 63 6F 6D 2E 65 67 2E " +
+                "61 6E 64 72 6F 69 64 2E 41 6C 69 70 61 79 47 70 68 6F 6E 65 FE"
+            );
+            const binaryData = binaryDataHex.split(' ').map(byte => parseInt(byte, 16));
+
+            // 将NDEF消息和二进制数据合并
+            const ndefMessage = encodeNdefUri(url).concat(binaryData);
+
+            // 将数据分割成每页4个字节
+            const pages = {};
+            let pageNumber = 6; // 从Page 6开始
+            for (let i = 0; i < ndefMessage.length; i += 4) {
+                const pageData = ndefMessage.slice(i, i + 4);
+                while (pageData.length < 4) {
+                    pageData.push(0x00); // 用0x00填充
+                }
+                const pageHex = pageData.map(byte => byte.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+                pages[`Page ${pageNumber}`] = pageHex;
+                pageNumber++;
+            }
+
+            // 合并所有页面数据
+            const allPages = { ...fixedPages, ...pages };
+
+            let data = `Filetype: Flipper NFC device\n`;
+            data += `Version: 4\n`;
+            data += `# Device type can be ISO14443-3A, ISO14443-3B, ISO14443-4A, ISO14443-4B, ISO15693-3, FeliCa, NTAG/Ultralight, Mifare Classic, Mifare Plus, Mifare DESFire, SLIX, ST25TB, EMV\n`;
+            data += `Device type: NTAG/Ultralight\n`;
+            data += `# UID is common for all formats\n`;
+            data += `UID: 1D 6E 74 9A 95 00 00\n`;
+            data += `# ISO14443-3A specific data\n`;
+            data += `ATQA: 00 44\n`;
+            data += `SAK: 00\n`;
+            data += `# NTAG/Ultralight specific data\n`;
+            data += `Data format version: 2\n`;
+            data += `NTAG/Ultralight type: NTAG215\n`;
+            data += `Signature: 1D 6E 74 8F 9A 95 00 00 1D 6E 74 8F 9A 95 00 00 1D 6E 74 8F 9A 95 00 00 1D 6E 74 8F 9A 95 00 00\n`;
+            data += `Mifare version: 00 04 04 02 01 00 11 03\n`;
+            data += `Counter 0: 0\n`;
+            data += `Tearing 0: 00\n`;
+            data += `Counter 1: 0\n`;
+            data += `Tearing 1: 00\n`;
+            data += `Counter 2: 0\n`;
+            data += `Tearing 2: 00\n`;
+            data += `Pages total: 135\n`;
+            data += `Pages read: 133\n`;
+
+            for (let pageNum = 0; pageNum < 135; pageNum++) {
+                const key = `Page ${pageNum}`;
+                const pageData = allPages[key] || '00 00 00 00';
+                data += `${key}: ${pageData}\n`;
+            }
+
+            data += `Failed authentication attempts: 0\n`;
+
+            return data;
+        }
+
+        // 将数据生成为文件并提供下载
+        function downloadFile(content, fileName, contentType) {
+            const a = document.createElement("a");
+            const file = new Blob([content], { type: contentType });
+            a.href = URL.createObjectURL(file);
+            a.download = fileName;
+            a.click();
+        }
+
+        document.getElementById("generateBtn").addEventListener("click", function () {
+            let payUrl = document.getElementById("payUrl").value;
+            if (!payUrl) {
+                alert("请输入支付URL！");
+                return;
+            }
+            const data = generateDataFile(payUrl);
+            downloadFile(data, 'Alipay-nfcPay.flipper0.nfc', 'text/plain');
+        });
+    </script>
+</body>
+</html>
